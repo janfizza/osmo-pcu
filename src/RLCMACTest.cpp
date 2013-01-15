@@ -25,12 +25,14 @@
 #include <cstring>
 #include "csn1.h"
 #include "gsm_rlcmac.h"
+#include "gprs_rlcmac.h"
 extern "C" {
 extern const struct log_info gprs_log_info;
 #include "pcu_vty.h"
 #include <osmocom/vty/telnet_interface.h>
 #include <osmocom/vty/logging.h>
 #include <osmocom/core/application.h>
+#include <osmocom/core/talloc.h>
 }
 using namespace std;
 
@@ -136,6 +138,7 @@ void testRlcMacDownlink()
 		else
 		{
 			cout << "vector1 == vector2 : FALSE" << endl;
+			exit(-1);
 		}
 		bitvec_unhex(resultVector, "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b");
 		bitvec_free(vector);
@@ -196,6 +199,7 @@ void testRlcMacUplink()
 		else
 		{
 			cout << "vector1 == vector2 : FALSE" << endl;
+			exit(-1);
 		}
 		bitvec_unhex(resultVector, "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b");
 		bitvec_free(vector);
@@ -203,12 +207,152 @@ void testRlcMacUplink()
 	}
 }
 
+void *tall_pcu_ctx = talloc_named_const(NULL, 1, "Osmo-PCU context");
+struct gprs_rlcmac_bts *gprs_rlcmac_bts;
+uint16_t spoof_mcc = 0, spoof_mnc = 0;
+
+struct allocalgo_test {
+	int line;
+	char algo;
+	int concurret_tbf;
+	uint8_t ms_class;
+	uint8_t ts[8];
+	enum gprs_rlcmac_tbf_direction dir;
+	int single_slot;
+	uint8_t result_first_ts;
+	uint8_t result_first_common_ts;
+	uint8_t result_ts[8];
+} allocalgo_test[] = {
+	/*
+	            algorithm
+	            |    concurrent tbf's allocation as used one line above
+	            |    |   class
+	            |    |   |   available timeslots
+	            |    |   |   |                        direction
+	            |    |   |   |                        |                   allocate single slot
+	            |    |   |   |                        |                   |  expected first TS
+	            |    |   |   |                        |                   |  |  expected control TS
+	            |    |   |   |                        |                   |  |  |   expected assignment TS
+	 */
+	/* single slot, we expect the first slot to be selected */
+	{ __LINE__, 'a', 0, 12, {0, 1, 1, 1, 1, 0, 0, 0}, GPRS_RLCMAC_UL_TBF, 1, 1, 1, {0, 1, 0, 0, 0, 0, 0, 0} },
+	{ __LINE__, 'a', 1, 12, {0, 1, 1, 1, 1, 0, 0, 0}, GPRS_RLCMAC_DL_TBF, 0, 1, 1, {0, 1, 0, 0, 0, 0, 0, 0} },
+	/* ms class 12 with 4 consecutively available timeslots (single slot first, then expand to multiple slots) */
+	{ __LINE__, 'b', 0, 12, {0, 1, 1, 1, 1, 0, 0, 0}, GPRS_RLCMAC_DL_TBF, 1, 3, 3, {0, 0, 0, 1, 0, 0, 0, 0} },
+	{ __LINE__, 'b', 1, 12, {0, 1, 1, 1, 1, 0, 0, 0}, GPRS_RLCMAC_DL_TBF, 0, 1, 3, {0, 1, 1, 1, 1, 0, 0, 0} },
+	/* ms class 12 with 4 consecutively available timeslots (uplink first, then assign downlink) */
+	{ __LINE__, 'b', 0, 12, {0, 1, 1, 1, 1, 0, 0, 0}, GPRS_RLCMAC_UL_TBF, 1, 3, 3, {0, 0, 0, 1, 0, 0, 0, 0} },
+	{ __LINE__, 'b', 1, 12, {0, 1, 1, 1, 1, 0, 0, 0}, GPRS_RLCMAC_DL_TBF, 0, 1, 3, {0, 1, 1, 1, 1, 0, 0, 0} },
+	/* ms class 12 with 5 consecutively available timeslots */
+	{ __LINE__, 'b', 0, 12, {0, 1, 1, 1, 1, 1, 0, 0}, GPRS_RLCMAC_DL_TBF, 0, 1, 3, {0, 1, 1, 1, 1, 0, 0, 0} },
+	/* ms class 12 with 1 available timeslots (downlink first, then assign uplink) */
+	{ __LINE__, 'b', 0, 12, {0, 0, 0, 0, 0, 0, 0, 1}, GPRS_RLCMAC_DL_TBF, 0, 7, 7, {0, 0, 0, 0, 0, 0, 0, 1} },
+	{ __LINE__, 'b', 1, 12, {0, 0, 0, 0, 0, 0, 0, 1}, GPRS_RLCMAC_UL_TBF, 0, 7, 7, {0, 0, 0, 0, 0, 0, 0, 1} },
+	/* ms class 19 with 6 consecutively available timeslots (uplink first, then assign downlink) */
+	{ __LINE__, 'b', 0, 19, {0, 1, 1, 1, 1, 1, 1, 0}, GPRS_RLCMAC_UL_TBF, 0, 4, 4, {0, 0, 0, 0, 1, 0, 0, 0} },
+	{ __LINE__, 'b', 1, 19, {0, 1, 1, 1, 1, 1, 1, 0}, GPRS_RLCMAC_DL_TBF, 0, 1, 4, {0, 1, 1, 1, 1, 1, 1, 0} },
+	/* ms class 6 with 3 consecutively available timeslots */
+	{ __LINE__, 'b', 0,  6, {0, 0, 0, 0, 0, 1, 1, 1}, GPRS_RLCMAC_DL_TBF, 0, 5, 6, {0, 0, 0, 0, 0, 1, 1, 1} },
+	/* class 6 with 3 consecutively available timeslots */
+	{ __LINE__, 'b', 0,  6, {0, 0, 0, 0, 0, 1, 1, 1}, GPRS_RLCMAC_UL_TBF, 0, 6, 6, {0, 0, 0, 0, 0, 0, 1, 0} },
+	{ __LINE__, 'b', 1,  6, {0, 0, 0, 0, 0, 1, 1, 1}, GPRS_RLCMAC_DL_TBF, 0, 5, 6, {0, 0, 0, 0, 0, 1, 1, 1} },
+	/* ms class 12 with 1 available timeslot at the end */
+	{ __LINE__, 'b', 0, 12, {0, 0, 0, 0, 0, 0, 0, 1}, GPRS_RLCMAC_DL_TBF, 0, 7, 7, {0, 0, 0, 0, 0, 0, 0, 1} },
+	{ __LINE__, 'b', 1, 12, {0, 0, 0, 0, 0, 0, 0, 1}, GPRS_RLCMAC_UL_TBF, 0, 7, 7, {0, 0, 0, 0, 0, 0, 0, 1} },
+	/* ms class 18 with 8 available timeslots (downlink first, then assign uplink) */
+	{ __LINE__, 'b', 0, 18, {1, 1, 1, 1, 1, 1, 1, 1}, GPRS_RLCMAC_DL_TBF, 0, 0, 0, {1, 1, 1, 1, 1, 1, 1, 1} },
+	{ __LINE__, 'b', 1, 18, {1, 1, 1, 1, 1, 1, 1, 1}, GPRS_RLCMAC_UL_TBF, 0, 0, 0, {1, 1, 1, 1, 1, 1, 1, 1} },
+	/* ms class 19 with 6 consecutively available timeslots (single slot first, then expand to multiple slots) */
+	{ __LINE__, 'b', 0, 19, {0, 1, 1, 1, 1, 1, 1, 0}, GPRS_RLCMAC_DL_TBF, 1, 4, 4, {0, 0, 0, 0, 1, 0, 0, 0} },
+	{ __LINE__, 'b', 1, 19, {0, 1, 1, 1, 1, 1, 1, 0}, GPRS_RLCMAC_DL_TBF, 0, 1, 4, {0, 1, 1, 1, 1, 1, 1, 0} },
+	/* end */
+	{ 0, 0, 0,  0, {0, 0, 0, 0, 0, 0, 0, 0}, GPRS_RLCMAC_DL_TBF, 0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0} },
+};
+
+void testAllocAlgorithm()
+{
+	struct gprs_rlcmac_bts *bts;
+	struct gprs_rlcmac_tbf *tbf = NULL, *tbf_old = NULL;
+	uint8_t tfi, trx, use_trx;
+	int i, test = 0;
+
+	bts = gprs_rlcmac_bts =
+		talloc_zero(tall_pcu_ctx, struct gprs_rlcmac_bts);
+
+next_test:
+	if (allocalgo_test[test].algo == 'b')
+		bts->alloc_algorithm = alloc_algorithm_b;
+	else
+		bts->alloc_algorithm = alloc_algorithm_a;
+	printf("Test at line %d\n", allocalgo_test[test].line);
+	for (i = 0; i < 8; i++)
+		bts->trx[0].pdch[i].enable = allocalgo_test[test].ts[i];
+
+	if (tbf) {
+		use_trx = tbf->trx;
+	} else {
+		use_trx = -1;
+	}
+	tfi = tfi_alloc(allocalgo_test[test].dir, &trx, use_trx);
+	if (tfi < 0) {
+		printf("No PDCH resource\n");
+		exit(-1);
+	}
+	/* set number of downlink slots according to multislot class */
+	tbf = tbf_alloc(tbf_old, allocalgo_test[test].dir, tfi, trx,
+		allocalgo_test[test].ms_class,
+		allocalgo_test[test].single_slot);
+	if (!tbf) {
+		printf("No PDCH ressource\n");
+		exit(-1);
+	}
+
+	if (tbf->first_ts != allocalgo_test[test].result_first_ts) {
+		printf("First TS=%d is not as expected (%d)\n",
+			tbf->first_ts, allocalgo_test[test].result_first_ts);
+		exit(-1);
+	}
+	if (tbf->first_common_ts
+		 != allocalgo_test[test].result_first_common_ts) {
+		printf("First TS=%d is not as expected (%d)\n",
+			tbf->first_common_ts,
+			allocalgo_test[test].result_first_common_ts);
+		exit(-1);
+	}
+	for (i = 0; i < 8; i++) {
+		if (tbf->pdch[i] && allocalgo_test[test].result_ts[i])
+			continue;
+		if (!tbf->pdch[i] && !allocalgo_test[test].result_ts[i])
+			continue;
+		printf("TS=%d is not assigned as expected (%d)\n", i,
+			allocalgo_test[test].result_ts[i]);
+		exit(-1);
+	}
+
+	test++;
+	if (tbf_old) {
+		tbf_free(tbf_old);
+		tbf_old = NULL;
+	}
+	if (allocalgo_test[test].line && allocalgo_test[test].concurret_tbf) {
+		tbf_old = tbf;
+		goto next_test;
+	}
+	tbf_free(tbf);
+	if (allocalgo_test[test].line)
+		goto next_test;
+
+	printf("All alloc-algorithm tests successfull\n");
+}
+
 int main(int argc, char *argv[])
 {
 	osmo_init_logging(&gprs_log_info);
+	log_set_log_level(osmo_stderr_target, LOGL_DEBUG);
 
 	//printSizeofRLCMAC();
 	testRlcMacDownlink();
 	testRlcMacUplink();
+	testAllocAlgorithm();
 
 }

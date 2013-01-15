@@ -74,10 +74,14 @@ noinst_HEADERS = \
 	sysmo_l1_if.h \
 	femtobts.h
 
-RLCMACTest_SOURCES = RLCMACTest.cpp
+RLCMACTest_SOURCES = RLCMACTest.cpp \
+	sysmo_l1_if.c \
+	sysmo_l1_fwd.c
 RLCMACTest_LDADD = \
 	libgprs.la \
+	$(LIBOSMOGB_LIBS) \
 	$(LIBOSMOCORE_LIBS) \
+	$(LIBOSMOGSM_LIBS) \
 	$(COMMON_LA)
 
 osmo_pcu_SOURCES = pcu_main.cpp
