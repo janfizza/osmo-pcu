@@ -144,6 +144,8 @@ void testRlcMacDownlink()
 		bitvec_free(vector);
 		free(data);
 	}
+
+	bitvec_free(resultVector);
 }
 
 
@@ -205,6 +207,8 @@ void testRlcMacUplink()
 		bitvec_free(vector);
 		free(data);
 	}
+
+	bitvec_free(resultVector);
 }
 
 void *tall_pcu_ctx = talloc_named_const(NULL, 1, "Osmo-PCU context");
