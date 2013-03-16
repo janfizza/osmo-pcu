@@ -419,7 +419,7 @@ bssgp_failed:
 	LOGP(DL1IF, LOGL_DEBUG, " nsvci=%d\n", info_ind->nsvci[0]);
 	LOGP(DL1IF, LOGL_DEBUG, " local_port=%d\n", info_ind->local_port[0]);
 	LOGP(DL1IF, LOGL_DEBUG, " remote_port=%d\n", info_ind->remote_port[0]);
-	LOGP(DL1IF, LOGL_DEBUG, " remote_ip=%d\n", info_ind->remote_ip[0]);
+	LOGP(DL1IF, LOGL_DEBUG, " remote_ip=%08x\n", info_ind->remote_ip[0]);
 
 	rc = gprs_bssgp_create(info_ind->local_port[0],
 		info_ind->remote_ip[0], info_ind->remote_port[0],
