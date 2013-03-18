@@ -435,8 +435,8 @@ int gprs_rlcmac_rcv_control_block(bitvec *rlc_block, uint8_t trx, uint8_t ts,
 					ms_class = get_ms_class_by_capability(&ul_control_block->u.Packet_Resource_Request.MS_Radio_Access_capability);
 				if (!ms_class)
 					LOGP(DRLCMAC, LOGL_NOTICE, "MS does not give us a class.\n");
-				tbf = alloc_ul_tbf(trx, ms_class, tlli, 0, NULL);
-#warning FIXME TA!!!
+				rc = recall_timing_advance(tlli);
+				tbf = alloc_ul_tbf(trx, ms_class, tlli, (rc < 0) ? 0 : rc, NULL);
 				if (!tbf)
 					break;
 				/* set control ts to current MS's TS, until assignment complete */
