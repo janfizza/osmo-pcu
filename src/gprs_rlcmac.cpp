@@ -920,10 +920,6 @@ void tbf_free(struct gprs_rlcmac_tbf *tbf)
 	gprs_rlcmac_rssi_rep(tbf);
 	gprs_rlcmac_lost_rep(tbf);
 
-	/* store last timing advance */
-	if (tbf->tlli_valid)
-		remember_timing_advance(tbf->tlli, tbf->ta);
-
 	debug_diagram(tbf->diag, "+---------------+");
 	debug_diagram(tbf->diag, "|    THE END    |");
 	debug_diagram(tbf->diag, "+---------------+");
